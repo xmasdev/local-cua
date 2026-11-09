@@ -48,7 +48,15 @@ agent: switch_workspace 2 > Super+W (Firefox) > gmail.com > Compose > fills To, 
   locates the target on screen. There is no separate planner: the model reasons before every step, and only
   the chosen actions are kept in the history.
 - **Server:** llama.cpp in router mode, so the same server also hosts a general chat model
-  (Qwen3.5-9B) without loading both at once.
+  (Qwen3.5-9B) without loading both at once. Holo runs fully on the GPU with an 80k-token context
+  (the most that fits in 6 GB without offloading layers).
+- **Reading long pages:** instead of scrolling through a page screenshot by screenshot, the agent can call
+  `read_text`, which copies the text of the focused window (your clipboard is restored afterwards). Short
+  text goes straight to Holo. Text over 4,000 characters goes to a reader model (Qwen3.5-9B, text only)
+  together with your request, and its answer is shown to you directly. Only these calls swap models, so
+  normal steps stay fast; a long read takes about 20 to 30 s including the swap.
+- **Loops:** if the agent repeats the same actions, it gets targeted advice (for example, use `read_text`
+  instead of scrolling). After three warnings it stops and tells you it is stuck.
 - **Input:** `hyprctl` places the cursor on an exact pixel and `ydotool` acts as a virtual mouse and keyboard
   through `/dev/uinput`.
 - **Service:** `service.py` holds the conversation, runs the agent loop in a background thread and serves a
@@ -112,7 +120,7 @@ Reproduce: `python3 bench/prepare_data.py`, start a model with `bench/serve.sh`,
 
 - Arch Linux with Hyprland 0.57 or newer (Lua config; the cursor and workspace calls use `hl.dsp.*`)
 - An NVIDIA GPU with 6 GB of VRAM or more, and llama.cpp built with CUDA
-- `grim`, `ydotool`, `python`, `python-pillow`, `curl`
+- `grim`, `ydotool`, `wl-clipboard`, `python`, `python-pillow`, `curl`
 - For the phone app: Tailscale on the PC and on the phone
 
 ## Install
@@ -196,6 +204,7 @@ that matters, and watch it the first few times.
 | `CUA_GLIDE` | `1` | Animate cursor moves instead of teleporting |
 | `CUA_MAX_STEPS` | `40` | Step limit per task in the service |
 | `CUA_PORT` | `8765` | Web app port (localhost only) |
+| `CUA_READER` | `Qwen3.5-9B-reader` | Model that answers from long page text (`Qwen3-4B-Q5_K_M` is faster but less exact; empty disables it) |
 
 Model settings (context size, image tokens, slots) are in `config/models.ini`. The desktop facts the
 agent is told about (screen size, shortcuts, launcher) are in `SYSTEM_PROMPT` at the top of `agent.py`.
@@ -208,6 +217,8 @@ Adjust them to your own setup.
 - The PC has to be awake and unlocked.
 - Typing uses a US keyboard layout.
 - One monitor is assumed (the focused one).
+- `read_text` copies everything in the window, including menus and sidebars, so on busy sites the reader
+  can mix navigation items into its answer.
 
 ## Project layout
 

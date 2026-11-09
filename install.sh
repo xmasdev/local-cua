@@ -11,7 +11,7 @@ warn() { printf '    \033[33m!!\033[0m  %s\n' "$*"; }
 [ "$REPO" = "$HOME/cua" ] || warn "the scripts expect the repo at ~/cua (it is at $REPO). Move it or symlink it: ln -s $REPO ~/cua"
 
 say "Dependencies"
-for c in hyprctl grim ydotool python3 curl; do command -v $c >/dev/null && ok "$c" || warn "$c missing (pacman -S ${c/hyprctl/hyprland})"; done
+for c in hyprctl grim ydotool python3 curl wl-paste; do command -v $c >/dev/null && ok "$c" || { p=${c/hyprctl/hyprland}; warn "$c missing (pacman -S ${p/wl-paste/wl-clipboard})"; }; done
 python3 -c "import PIL" 2>/dev/null && ok "python-pillow" || warn "python-pillow missing (pacman -S python-pillow)"
 if command -v llama-server >/dev/null || [ -x ~/llama.cpp/build/bin/llama-server ]; then ok "llama-server"
 else warn "llama-server not found: build llama.cpp with CUDA (or set LLAMA_SERVER=/path/to/llama-server)"; fi
