@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>CUA</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<meta name="theme-color" content="#111318">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CUA">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
+  --accent: #2563eb; --accent-text: #fff; --user: #2563eb; --user-text: #fff;
+  --agent: #eef1f5; --warn: #b45309; --warn-bg: #fef3c7; --danger: #dc2626; --ok: #059669;
+  --mono: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0f13; --panel: #15181e; --text: #e8eaef; --muted: #9aa1ad; --line: #262a33;
+    --accent: #4f8cff; --user: #3b6fe0; --agent: #1d2129; --warn: #fbbf24; --warn-bg: #3a2d0b; --danger: #f05252; --ok: #34d399;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex; flex-direction: column; height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+header {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .02em; }
+.pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--agent); color: var(--muted); white-space: nowrap; }
+.pill.working { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.pill.waiting { background: var(--warn-bg); color: var(--warn); }
+.pill.offline { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+.spacer { flex: 1; }
+button {
+  font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 10px; padding: 7px 12px; cursor: pointer; min-height: 36px;
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.stop { background: var(--danger); color: #fff; border-color: var(--danger); font-weight: 600; }
+button:disabled { opacity: .45; cursor: default; }
+#screenwrap {
+  position: relative; background: #000; border-bottom: 1px solid var(--line);
+  aspect-ratio: 16 / 9; max-height: 42dvh; margin: 0 auto; width: 100%; overflow: hidden;
+}
+#screenwrap.big { max-height: none; aspect-ratio: auto; height: 70dvh; }
+#screen { width: 100%; height: 100%; object-fit: contain; display: block; }
+#screenmsg { position: absolute; inset: 0; display: grid; place-items: center; color: #aaa; font-size: 13px; pointer-events: none; }
+.marker {
+  position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 3px solid #ff3b6b; box-shadow: 0 0 0 4px rgba(255,59,107,.35); pointer-events: none;
+  animation: ping 1.6s ease-out forwards;
+}
+@keyframes ping { 0% { transform: scale(.4); opacity: 1 } 70% { opacity: 1 } 100% { transform: scale(1.6); opacity: 0 } }
+.screenbar { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+.screenbar button { background: rgba(0,0,0,.55); color: #fff; border-color: rgba(255,255,255,.25); font-size: 12px; padding: 4px 10px; min-height: 30px; }
+#log { flex: 1; overflow-y: auto; padding: 12px 16px 4px; display: flex; flex-direction: column; gap: 8px; }
+.msg { max-width: 88%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
+.msg.user { align-self: flex-end; background: var(--user); color: var(--user-text); border-bottom-right-radius: 4px; }
+.msg.answer { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 4px; }
+.act { align-self: flex-start; font: 12.5px/1.4 var(--mono); color: var(--muted); padding: 2px 4px; max-width: 100%; }
+.act summary { cursor: pointer; list-style: none; }
+.act summary::-webkit-details-marker { display: none; }
+.act summary::before { content: "▸ "; }
+.act[open] summary::before { content: "▾ "; }
+.act .why { white-space: pre-wrap; margin: 4px 0 2px 14px; font-family: system-ui, sans-serif; font-size: 13px; }
+.note { align-self: center; font-size: 12.5px; color: var(--muted); text-align: center; }
+.note.err { color: var(--danger); }
+.card {
+  align-self: stretch; border: 1px solid var(--warn); background: var(--warn-bg); color: var(--text);
+  border-radius: 12px; padding: 10px 12px;
+}
+.card b { color: var(--warn); }
+.card .row { display: flex; gap: 8px; margin-top: 8px; }
+.typing { align-self: flex-start; color: var(--muted); font-size: 13px; padding: 2px 4px; }
+footer {
+  display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--panel); border-top: 1px solid var(--line);
+}
+textarea {
+  flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; max-height: 120px; min-height: 42px;
+}
+textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>CUA</h1>
+  <span id="pill" class="pill offline">connecting…</span>
+  <span class="spacer"></span>
+  <button id="newbtn" title="Start a fresh session">New</button>
+  <button id="stopbtn" class="stop" disabled>Stop</button>
+</header>
+
+<div id="screenwrap">
+  <img id="screen" alt="Live view of the PC screen">
+  <div id="screenmsg">screen paused</div>
+  <div class="screenbar">
+    <button id="livebtn">Pause</button>
+    <button id="bigbtn">Expand</button>
+  </div>
+</div>
+
+<main id="log" aria-live="polite"></main>
+
+<footer>
+  <textarea id="input" rows="1" placeholder="Tell the agent what to do…" enterkeyhint="send"></textarea>
+  <button id="sendbtn" class="primary">Send</button>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log"), pill = $("pill"), input = $("input"), screen = $("screen");
+const seen = new Set();
+let state = "idle", waitingFor = null, live = true, typingEl = null;
+
+// ---------------------------------------------------------------- chat log
+function atBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 80; }
+function add(el) { const stick = atBottom(); log.appendChild(el); if (stick) log.scrollTop = log.scrollHeight; }
+function div(cls, text) { const d = document.createElement("div"); d.className = cls; d.textContent = text; return d; }
+function time(t) { return new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+
+function render(ev) {
+  switch (ev.kind) {
+    case "user": add(div("msg user", ev.text)); break;
+    case "answer": add(div("msg answer", ev.text)); break;
+    case "action": {
+      const d = document.createElement("details"); d.className = "act";
+      const s = document.createElement("summary"); s.textContent = ev.text; d.appendChild(s);
+      if (ev.thought) d.appendChild(div("why", ev.thought));
+      add(d);
+      if (ev.point && Date.now() / 1000 - ev.t < 5) marker(ev.point);
+      break;
+    }
+    case "question": case "confirm": {
+      const c = document.createElement("div"); c.className = "card";
+      const b = document.createElement("b"); b.textContent = ev.kind === "confirm" ? "Needs your OK" : "Question";
+      c.appendChild(b); c.appendChild(div("", ev.text));
+      if (ev.kind === "confirm") {
+        const row = div("row", "");
+        const yes = document.createElement("button"); yes.className = "primary"; yes.textContent = "Allow";
+        const no = document.createElement("button"); no.textContent = "Don't";
+        yes.onclick = () => send("yes"); no.onclick = () => send("no");
+        row.append(yes, no); c.appendChild(row);
+      }
+      add(c); break;
+    }
+    case "status": add(div("note", ev.text)); break;
+    case "error": add(div("note err", "⚠ " + ev.text)); break;
+    case "reset": log.innerHTML = ""; add(div("note", ev.text)); break;
+  }
+}
+
+function setState(s, wf) {
+  state = s; waitingFor = wf || null;
+  pill.className = "pill " + s;
+  pill.textContent = { idle: "idle", working: "working…", waiting: "waiting for you" }[s] || s;
+  $("stopbtn").disabled = s === "idle";
+  $("newbtn").disabled = s !== "idle";
+  input.placeholder = s === "waiting" ? "Reply to the agent…" : s === "working" ? "Add a correction or instruction…" : "Tell the agent what to do…";
+  if (s !== "working" && typingEl) { typingEl.remove(); typingEl = null; }
+}
+
+function thinking(text) {
+  if (!typingEl) { typingEl = div("typing", ""); }
+  typingEl.textContent = "thinking… (" + text + ")";
+  add(typingEl);   // re-append keeps it last
+}
+
+// ---------------------------------------------------------------- events
+function connect() {
+  const es = new EventSource("/events");
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.kind === "state") return setState(ev.text, ev.waiting_for);
+    if (ev.kind === "thinking") return thinking(ev.text);
+    if (ev.id && seen.has(ev.id)) return;
+    if (ev.id) seen.add(ev.id);
+    if (typingEl && ev.kind !== "state") { typingEl.remove(); typingEl = null; }
+    render(ev);
+  };
+  es.onerror = () => { pill.className = "pill offline"; pill.textContent = "offline, retrying"; };
+}
+
+// ---------------------------------------------------------------- actions
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  if (!r.ok) add(div("note err", (await r.text()) || ("error " + r.status)));
+}
+function send(text) {
+  text = (text ?? input.value).trim(); if (!text) return;
+  post("/send", { text }); input.value = ""; autosize();
+}
+$("sendbtn").onclick = () => send();
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(pointer: fine)").matches) { e.preventDefault(); send(); }
+});
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
+input.addEventListener("input", autosize);
+$("stopbtn").onclick = () => post("/stop");
+$("newbtn").onclick = () => { if (confirm("Start a fresh session? The agent forgets this conversation.")) post("/new"); };
+
+// ---------------------------------------------------------------- live screen
+function startScreen() { screen.src = "/screen.mjpg?t=" + Date.now(); $("screenmsg").textContent = "loading screen…"; }
+function stopScreen() { screen.removeAttribute("src"); $("screenmsg").textContent = "screen paused"; $("screenmsg").style.display = ""; }
+screen.onload = () => { $("screenmsg").style.display = "none"; };
+screen.onerror = () => { $("screenmsg").style.display = ""; $("screenmsg").textContent = "screen unavailable"; if (live && !document.hidden) setTimeout(startScreen, 3000); };
+$("livebtn").onclick = () => { live = !live; $("livebtn").textContent = live ? "Pause" : "Live"; live ? startScreen() : stopScreen(); };
+$("bigbtn").onclick = () => { const w = $("screenwrap"); w.classList.toggle("big"); $("bigbtn").textContent = w.classList.contains("big") ? "Shrink" : "Expand"; };
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopScreen(); else if (live) startScreen(); });
+
+function marker(p) {
+  // map [0,1000] coords onto the displayed (object-fit: contain) image
+  const box = screen.getBoundingClientRect(), wrap = $("screenwrap").getBoundingClientRect();
+  const iw = screen.naturalWidth || 16, ih = screen.naturalHeight || 9;
+  const s = Math.min(box.width / iw, box.height / ih), w = iw * s, h = ih * s;
+  const ox = box.left - wrap.left + (box.width - w) / 2, oy = box.top - wrap.top + (box.height - h) / 2;
+  const m = div("marker", ""); m.style.left = (ox + p.x / 1000 * w) + "px"; m.style.top = (oy + p.y / 1000 * h) + "px";
+  $("screenwrap").appendChild(m); setTimeout(() => m.remove(), 1700);
+}
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+connect(); startScreen();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+[Unit]
+Description=CUA computer-use agent service (web/phone UI on 127.0.0.1:8765)
+Wants=llama-router.service ydotool.service
+After=llama-router.service ydotool.service graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 -u %h/cua/service.py
+Environment=CUA_MODEL=Holo-3.1-4B
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

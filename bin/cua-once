@@ -1,0 +1,6 @@
+#!/bin/bash
+# cua-once "task"  - one-shot run of the local computer-use agent (old mode; see `cua` for the chat) (Holo3.1-4B via llama.cpp router on :8080)
+# Kill switch: Super+Shift+Escape
+export CUA_BASE_URL=${CUA_BASE_URL:-http://127.0.0.1:8080/v1} CUA_MODEL=${CUA_MODEL:-Holo-3.1-4B}
+curl -sf "${CUA_BASE_URL%/v1}/health" >/dev/null || { echo "llama-server not running: start it with ~/cua/serve.sh"; exit 1; }
+exec python3 ~/cua/agent.py --refine "$@"

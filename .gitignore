@@ -1,0 +1,13 @@
+# private: never commit
+token
+session.json
+session.json.tmp
+runs/
+
+# local / generated
+__pycache__/
+*.log
+docs/
+bench/data/
+bench/results/*.progress
+bench/server-*.log

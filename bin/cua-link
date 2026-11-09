@@ -1,0 +1,12 @@
+#!/bin/bash
+# cua-link - print the one-time sign-in links for the CUA web/phone app
+t=$(cat ~/cua/token 2>/dev/null) || { echo "no token yet: start the service first (systemctl --user start cua)"; exit 1; }
+echo "On this PC:   http://127.0.0.1:8765/?token=$t"
+if command -v tailscale >/dev/null && ts=$(tailscale status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" 2>/dev/null) && [ -n "$ts" ]; then
+  echo "On your phone (Tailscale): https://$ts/?token=$t"
+else
+  echo "Phone link appears here once Tailscale is set up (see ~/cua/README.md)."
+fi
+if command -v qrencode >/dev/null && [ -n "$ts" ]; then
+  echo; echo "Scan with your phone camera:"; qrencode -t ansiutf8 "https://$ts/?token=$t"
+fi

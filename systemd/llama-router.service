@@ -1,0 +1,10 @@
+[Unit]
+Description=llama.cpp router (local models in ~/models/llama.cpp, :8080)
+
+[Service]
+ExecStart=%h/cua/serve.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
