@@ -17,6 +17,7 @@ MODEL = os.environ.get("CUA_MODEL", "Holo-3.1-4B")
 
 SYSTEM_PROMPT = """You are a computer-use agent operating the user's Linux desktop (Arch Linux, Hyprland tiling window manager, Caelestia shell, single 1920x1080 screen).
 Each turn you receive a screenshot inside <observation> tags. Decide the single next action and call exactly one tool.
+Think briefly: in one to three short sentences, note what changed on screen and what to do next, then act.
 Useful facts about this desktop:
 - App launcher: press the Super key alone (key "super"), type the app name, press Enter.
 - Shortcuts: Super+T terminal (foot), Super+W browser (Firefox), Super+E files (Thunar), Super+C editor (VSCodium), Super+Q close window, Super+F fullscreen.
@@ -182,7 +183,25 @@ class Desktop:
 # ---------------------------------------------------------------- model
 SLOTS = os.environ.get("CUA_SLOTS", "1") == "1"   # pin agent loop / zoom pass to separate server slots
 TIMING = os.environ.get("CUA_TIMING") == "1"
-THINK_BUDGET = int(os.environ.get("CUA_THINK_BUDGET", "512"))
+THINK_BUDGET = int(os.environ.get("CUA_THINK_BUDGET", "256"))
+THINK_MODE = os.environ.get("CUA_THINK_MODE", "adaptive")   # adaptive | always | never
+TROUBLE = re.compile(r"error|NOTE:|declined|blocked|Not executed|not executed", re.I)
+
+
+def thumb_of(img):
+    return img.resize((240, 135)).convert("L").tobytes()
+
+
+def changed(a, b):
+    return a is None or b is None or sum(abs(x - y) > 12 for x, y in zip(a, b)) >= 30
+
+
+def should_think(step, last_result, screen_changed, user_spoke):
+    """Thinking costs ~1.5-2 s per step. Use it where it matters: planning the task, after the user
+    said something, after errors/refusals/loop warnings, or when the last action changed nothing."""
+    if THINK_MODE == "always": return True
+    if THINK_MODE == "never": return False
+    return step == 1 or user_spoke or not screen_changed or bool(TROUBLE.search(last_result or ""))
 
 
 def chat(messages, tools=None, temperature=0.8, thinking=True, max_tokens=2048, schema=None, slot=None):
@@ -315,12 +334,13 @@ def run(task, max_steps, confirm, dry, use_refine, settle):
     d = Desktop(dry)
     messages = [{"role": "system", "content": SYSTEM_PROMPT.replace("{apps}", installed_apps())},
                 {"role": "user", "content": task}]
-    history, last_nudge = [], -99
+    history, last_nudge, prev_thumb, last_result = [], -99, None, ""
     for step in range(1, max_steps + 1):
         img = d.screenshot(); img.save(os.path.join(logdir, f"{step:02d}.png"))
+        th = thumb_of(img); think = should_think(step, last_result, changed(prev_thumb, th), False); prev_thumb = th
         messages.append(observation(img)); trim_to_last_n_images(messages, 3, keep=1)
         t0 = time.time()
-        msg = chat(messages, tools=TOOLS, slot=0)
+        msg = chat(messages, tools=TOOLS, slot=0, thinking=think, max_tokens=1200)
         calls = msg.get("tool_calls") or []
         # history keeps only the parsed output, never the reasoning
         messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls or None})
@@ -364,10 +384,22 @@ def run(task, max_steps, confirm, dry, use_refine, settle):
                           "different way to accomplish the task, and do that instead.")
                 last_nudge = step; print("  ↺ loop detected, nudging", file=sys.stderr); log.write("  LOOP NUDGE\n")
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+            last_result = str(result)
         time.sleep(settle)
         if not dry:
             wait_until_stable(d)
     print("Step budget exhausted"); return None
+
+
+def wait_for_change(d, timeout=1.5, interval=0.1):
+    """After launching something: return as soon as the screen starts changing (or after timeout)."""
+    def thumb():
+        raw = subprocess.check_output(["grim", "-o", d.mon, "-s", str(240 / d.w), "-t", "ppm", "-"])
+        return Image.open(io.BytesIO(raw)).resize((240, 135)).convert("L").tobytes()
+    first, t0 = thumb(), time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(interval)
+        if sum(abs(a - b) > 12 for a, b in zip(first, thumb())) >= 30: return
 
 
 def wait_until_stable(d, timeout=4.0, interval=0.2):
@@ -403,7 +435,7 @@ def execute(d, name, a):
         if a.get("press_enter"): d.key("enter")
     elif name == "key":
         d.key(a["keys"])
-        if "super" in a["keys"].lower() and not d.dry: time.sleep(1.5)  # app launches / launcher animation
+        if "super" in a["keys"].lower() and not d.dry: wait_for_change(d, 1.5)  # app launch / launcher
     elif name == "scroll": d.scroll(a["x"], a["y"], a["direction"], a.get("amount", 3))
     elif name == "drag": d.drag(a["x1"], a["y1"], a["x2"], a["y2"])
     elif name == "wait": time.sleep(min(float(a.get("seconds", 1)), 10))

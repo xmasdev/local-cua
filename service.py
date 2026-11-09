@@ -176,6 +176,7 @@ you don't need to touch the screen for that."""
             try: m = self.inbox.get_nowait()
             except queue.Empty: return
             if m is UNANSWERED: continue
+            self.user_spoke = True
             self.messages.append({"role": "user", "content": f"New message from the user while you were working: {m}"})
             self.journal.append(f"User (mid-task): {m}")
 
@@ -204,70 +205,86 @@ you don't need to touch the screen for that."""
 
     def run_task(self):
         d = self.desktop
-        history, last_nudge, empty_steps = [], -99, 0
+        history, last_nudge, empty_steps, prev_thumb, last_result = [], -99, 0, None, ""
         for step in range(1, MAX_STEPS + 1):
             if self.stop.is_set(): raise Stopped()
+            self.user_spoke = False
             self.drain_inbox()
             self.compact()
             img = d.screenshot()
+            th = agent.thumb_of(img)
+            think = agent.should_think(step, last_result, agent.changed(prev_thumb, th), self.user_spoke)
+            prev_thumb = th
             self.messages.append(agent.observation(img)); agent.trim_to_last_n_images(self.messages, 3, keep=1)
-            self.emit("thinking", f"step {step}")
-            msg = agent.chat(self.messages, tools=agent.TOOLS, slot=0, max_tokens=1200)
-            calls = msg.get("tool_calls") or []
-            thought = (msg.get("reasoning_content") or "").strip()
-            if not calls:
-                # Holo sometimes replies to conversational messages in plain text (and then repeats itself).
-                # Treat that as its answer to the user.
-                text = dedupe(msg.get("content") or "")
-                self.messages.append({"role": "assistant", "content": text})
-                if text:
-                    self.journal.append(f"Agent answered: {text}")
-                    self.emit("answer", text, thought=thought[-600:]); return
-                empty_steps += 1
-                if empty_steps >= 3: raise RuntimeError("the model produced no action three times in a row")
-                continue
-            self.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
-            for call in calls:
-                name = call["function"]["name"]
-                try: a = json.loads(call["function"]["arguments"] or "{}")
-                except json.JSONDecodeError: a = {}
-                if self.stop.is_set():
-                    self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Not executed: the user pressed Stop."})
-                    raise Stopped()
-                if name in ("click", "double_click", "right_click") and a.get("element"):
-                    a["x"], a["y"] = agent.refine(img, a["element"], a["x"], a["y"])
-                desc = agent.describe(name, a)
-                self.journal.append(f"Action: {desc}")
-                if name == "answer":
-                    self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Delivered to the user."})
-                    self.journal.append(f"Agent answered: {a.get('content', '')}")
-                    self.emit("answer", a.get("content", ""), thought=thought[-600:])
-                    return
-                point = {"x": a["x"], "y": a["y"]} if "x" in a and "y" in a else None
-                if name == "ask_user":
-                    result = self.wait_reply("question", a.get("question", ""))
-                    self.journal.append(f"User replied: {result}")
-                else:
-                    self.emit("action", desc, thought=thought[-600:], point=point, tool=name)
-                    risky = (name in ("click", "double_click", "right_click") and agent.RISKY.search(a.get("element", ""))) \
-                        or (name == "key" and agent.RISKY_KEYS.match(a.get("keys", "").replace(" ", "").lower()))
-                    if risky:
-                        r = self.wait_reply("confirm", f"Allow this? {desc}").strip()
-                        if r.lower() not in ("y", "yes", "ok", "allow", "go", "do it"):
-                            self.journal.append(f"User declined: {r}")
-                            self.messages.append({"role": "tool", "tool_call_id": call["id"],
-                                                  "content": f"User declined this action. Their message: {r}"})
-                            continue
-                    try:
-                        result = agent.execute(d, name, a)
-                    except Exception as e:
-                        result = f"error: {e}"; self.emit("status", str(result))
-                history.append(agent.signature(name, a)); recent = history[-8:]
-                if step - last_nudge >= 4 and max(recent.count(x) for x in recent) >= 3:
-                    result = (f"{result}\nNOTE: you have repeated similar actions several times without making progress. "
-                              "Step back, think about a completely different way to accomplish the task, and do that instead.")
-                    last_nudge = step
-                self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+            while True:   # runs once, or twice when a quick step tried to finish (see "answer" below)
+                redo = False
+                self.emit("thinking", f"step {step}" + ("" if think else ", quick"))
+                msg = agent.chat(self.messages, tools=agent.TOOLS, slot=0, max_tokens=1200, thinking=think)
+                calls = msg.get("tool_calls") or []
+                thought = (msg.get("reasoning_content") or "").strip()
+                if not calls:
+                    # Holo sometimes replies to conversational messages in plain text (and then repeats itself).
+                    # Treat that as its answer to the user.
+                    text = dedupe(msg.get("content") or "")
+                    if text and not think and agent.THINK_MODE == "adaptive":
+                        think = True; continue          # finishing: re-decide with thinking on
+                    self.messages.append({"role": "assistant", "content": text})
+                    if text:
+                        self.journal.append(f"Agent answered: {text}")
+                        self.emit("answer", text, thought=thought[-600:]); return
+                    empty_steps += 1
+                    if empty_steps >= 3: raise RuntimeError("the model produced no action three times in a row")
+                    continue
+                self.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
+                for call in calls:
+                    name = call["function"]["name"]
+                    try: a = json.loads(call["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError: a = {}
+                    if self.stop.is_set():
+                        self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Not executed: the user pressed Stop."})
+                        raise Stopped()
+                    if name in ("click", "double_click", "right_click") and a.get("element"):
+                        a["x"], a["y"] = agent.refine(img, a["element"], a["x"], a["y"])
+                    desc = agent.describe(name, a)
+                    self.journal.append(f"Action: {desc}")
+                    if name == "answer" and not think and agent.THINK_MODE == "adaptive":
+                        # finishing is a decision worth thinking about: redo this step with thinking on
+                        self.messages.pop(); self.journal.pop()
+                        think, redo = True, True
+                        break
+                    if name == "answer":
+                        self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Delivered to the user."})
+                        self.journal.append(f"Agent answered: {a.get('content', '')}")
+                        self.emit("answer", a.get("content", ""), thought=thought[-600:])
+                        return
+                    point = {"x": a["x"], "y": a["y"]} if "x" in a and "y" in a else None
+                    if name == "ask_user":
+                        result = self.wait_reply("question", a.get("question", ""))
+                        self.journal.append(f"User replied: {result}")
+                    else:
+                        self.emit("action", desc, thought=thought[-600:], point=point, tool=name)
+                        risky = (name in ("click", "double_click", "right_click") and agent.RISKY.search(a.get("element", ""))) \
+                            or (name == "key" and agent.RISKY_KEYS.match(a.get("keys", "").replace(" ", "").lower()))
+                        if risky:
+                            r = self.wait_reply("confirm", f"Allow this? {desc}").strip()
+                            if r.lower() not in ("y", "yes", "ok", "allow", "go", "do it"):
+                                self.journal.append(f"User declined: {r}")
+                                self.messages.append({"role": "tool", "tool_call_id": call["id"],
+                                                      "content": f"User declined this action. Their message: {r}"})
+                                continue
+                        try:
+                            result = agent.execute(d, name, a)
+                        except Exception as e:
+                            result = f"error: {e}"; self.emit("status", str(result))
+                    history.append(agent.signature(name, a)); recent = history[-8:]
+                    if step - last_nudge >= 4 and max(recent.count(x) for x in recent) >= 3:
+                        result = (f"{result}\nNOTE: you have repeated similar actions several times without making progress. "
+                                  "Step back, think about a completely different way to accomplish the task, and do that instead.")
+                        last_nudge = step
+                    self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+                    last_result = str(result)
+                if redo: continue      # same screenshot, now with thinking
+                break
             time.sleep(0.15)
             agent.wait_until_stable(d)
             if step % 5 == 0: self.save()
