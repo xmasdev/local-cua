@@ -268,7 +268,7 @@ you don't need to touch the screen for that."""
                               "Step back, think about a completely different way to accomplish the task, and do that instead.")
                     last_nudge = step
                 self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
-            time.sleep(0.3)
+            time.sleep(0.15)
             agent.wait_until_stable(d)
             if step % 5 == 0: self.save()
         self.emit("answer", f"I used my step budget ({MAX_STEPS}) without finishing. Tell me how to continue.")

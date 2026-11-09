@@ -1,0 +1,5 @@
+baseline: step 4.80s | prompt 1.44s | gen 146 tok @ 46.3 tok/s (3.15s) | draft accepted 0/0 | same tool as recorded 12/15
+ngram-simple: step 4.44s | prompt 1.39s | gen 133 tok @ 47.0 tok/s (2.83s) | draft accepted 65/864 | same tool as recorded 12/15
+ngram-mod: step 4.28s | prompt 1.38s | gen 135 tok @ 49.9 tok/s (2.70s) | draft accepted 295/1384 | same tool as recorded 11/15
+draft08: step 5.59s | prompt 1.52s | gen 129 tok @ 33.8 tok/s (3.81s) | draft accepted 1136/3496 | same tool as recorded 14/15
+draft08n3: step 5.54s | prompt 1.54s | gen 143 tok @ 38.1 tok/s (3.75s) | draft accepted 1142/1953 | same tool as recorded 13/15

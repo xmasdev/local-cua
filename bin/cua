@@ -9,8 +9,8 @@ case "${1:-}" in
   start)
     [ $# -eq 1 ] || exec python3 ~/cua/client.py "$@"
     systemctl --user start $UNITS
-    for i in $(seq 30); do curl -sf http://127.0.0.1:8765/manifest.webmanifest >/dev/null && break; sleep 1; done
-    if curl -sf http://127.0.0.1:8765/manifest.webmanifest >/dev/null; then
+    for i in $(seq 30); do curl -sf http://127.0.0.1:8765/manifest.webmanifest >/dev/null && curl -sf http://127.0.0.1:8080/health >/dev/null && break; sleep 1; done
+    if curl -sf http://127.0.0.1:8765/manifest.webmanifest >/dev/null && curl -sf http://127.0.0.1:8080/health >/dev/null; then
       echo "CUA is running. Phone: open the CUA app (Tailscale connected). PC: run 'cua'."
       echo "The model loads into the GPU on the first task. Stop with: cua stop"
     else

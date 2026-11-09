@@ -124,8 +124,8 @@ class Desktop:
         self._run("hyprctl", "dispatch", f"hl.dsp.focus({{ workspace = {int(n)} }})")
 
     def screenshot(self):
-        png = subprocess.check_output(["grim", "-o", self.mon, "-"])
-        img = Image.open(io.BytesIO(png)).convert("RGB")
+        raw = subprocess.check_output(["grim", "-o", self.mon, "-t", "ppm", "-"])   # uncompressed: ~6x faster than PNG
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
         # grim captures device pixels; hyprctl movecursor wants logical pixels
         self.w, self.h = img.size
         return img
@@ -204,7 +204,7 @@ def chat(messages, tools=None, temperature=0.8, thinking=True, max_tokens=2048, 
 
 
 def png_b64(img):
-    buf = io.BytesIO(); img.save(buf, "PNG"); return base64.b64encode(buf.getvalue()).decode()
+    buf = io.BytesIO(); img.save(buf, "PNG", compress_level=1); return base64.b64encode(buf.getvalue()).decode()
 
 
 def installed_apps():
@@ -370,10 +370,11 @@ def run(task, max_steps, confirm, dry, use_refine, settle):
     print("Step budget exhausted"); return None
 
 
-def wait_until_stable(d, timeout=4.0, interval=0.4):
+def wait_until_stable(d, timeout=4.0, interval=0.2):
     """Wait until two consecutive screenshots match (apps finished opening / pages loaded)."""
-    def thumb():
-        return d.screenshot().resize((240, 135)).convert("L").tobytes()
+    def thumb():   # grim scales on capture: a 240x135 grab takes ~20 ms
+        raw = subprocess.check_output(["grim", "-o", d.mon, "-s", str(240 / d.w), "-t", "ppm", "-"])
+        return Image.open(io.BytesIO(raw)).resize((240, 135)).convert("L").tobytes()
     prev, t0 = thumb(), time.time()
     while time.time() - t0 < timeout:
         time.sleep(interval)
@@ -417,7 +418,7 @@ if __name__ == "__main__":
     ap.add_argument("--confirm", action="store_true", help="confirm every action")
     ap.add_argument("--dry-run", action="store_true", help="never send input")
     ap.add_argument("--refine", action=argparse.BooleanOptionalAction, default=False, help="zoom pass on clicks")
-    ap.add_argument("--settle", type=float, default=0.3, help="seconds to wait after each action")
+    ap.add_argument("--settle", type=float, default=0.15, help="seconds to wait after each action")
     a = ap.parse_args()
     try:
         run(a.task, a.max_steps, a.confirm, a.dry_run, a.refine, a.settle)
