@@ -192,7 +192,7 @@ class Desktop:
         seq = [f"{c}:1" for c in codes] + [f"{c}:0" for c in reversed(codes)]
         self._run("ydotool", "key", *seq)
 
-    def read_text(self, limit=24000):
+    def read_text(self, limit=80000):
         """Ctrl+A, Ctrl+C, read the clipboard, then put the user's clipboard back and drop the copied
         page text from cliphist. (Firefox does not publish Ctrl+A as the primary selection.)"""
         if self.dry: return "(dry run)"
