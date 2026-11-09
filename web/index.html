@@ -191,7 +191,7 @@ function thinking(text) {
   t.querySelector(".lbl").lastChild.textContent = text.includes("quick") ? "acting" : "thinking";
   t.querySelector(".live").textContent = "";
 }
-function live(text) {
+function showLive(text) {
   const t = ensureTyping(), stick = atBottom();
   // show the tail of what the model is writing right now
   t.querySelector(".live").textContent = text.split("\n").filter(Boolean).slice(-5).join("\n");
@@ -205,7 +205,7 @@ function connect() {
     const ev = JSON.parse(m.data);
     if (ev.kind === "state") return setState(ev.text, ev.waiting_for);
     if (ev.kind === "thinking") return thinking(ev.text);
-    if (ev.kind === "live") return live(ev.text);
+    if (ev.kind === "live") return showLive(ev.text);
     if (ev.id && seen.has(ev.id)) return;
     if (ev.id) seen.add(ev.id);
     if (typingEl && ev.kind !== "state") { typingEl.remove(); typingEl = null; }
