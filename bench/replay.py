@@ -51,7 +51,7 @@ def main():
         for i, (n, name, args) in enumerate(steps):
             img = Image.open(os.path.join(a.run, f"{n:02d}.png")).convert("RGB")
             msgs.append(agent.observation(img)); agent.trim_to_last_n_images(msgs, 3, keep=1)
-            body = {"model": "x", "messages": msgs, "temperature": 0.8, "max_tokens": 1200, "tools": agent.TOOLS,
+            body = {"model": agent.MODEL, "messages": msgs, "temperature": 0.8, "max_tokens": 1200, "tools": agent.TOOLS,
                     "tool_choice": "required", "id_slot": 0, "reasoning_budget_tokens": agent.THINK_BUDGET,
                     "chat_template_kwargs": {"enable_thinking": os.environ.get("CUA_THINK", "1") == "1"}}
             t0 = time.time()

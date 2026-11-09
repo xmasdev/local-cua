@@ -42,6 +42,9 @@ def listen():
                 elif k in ("status", "reset"): out(f"{C['dim']}  [{t}]{C['x']}")
                 elif k == "error": out(f"{C['red']}  error: {t}{C['x']}")
                 elif k == "state" and t == "working": out(f"{C['dim']}  [working… /stop to halt]{C['x']}")
+                elif k == "live":   # one updating status line with what the agent is writing right now
+                    tail = t.replace("\n", " ")[-(os.get_terminal_size().columns - 6):]
+                    sys.stdout.write("\r\033[K" + C['dim'] + "  ~ " + tail + C['x']); sys.stdout.flush()
         except Exception:
             import time; time.sleep(2)
 

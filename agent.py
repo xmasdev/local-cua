@@ -18,6 +18,7 @@ MODEL = os.environ.get("CUA_MODEL", "Holo-3.1-4B")
 SYSTEM_PROMPT = """You are a computer-use agent operating the user's Linux desktop (Arch Linux, Hyprland tiling window manager, Caelestia shell, single 1920x1080 screen).
 Each turn you receive a screenshot inside <observation> tags. Decide the single next action and call exactly one tool.
 Think briefly: in one to three short sentences, note what changed on screen and what to do next, then act.
+Outside of thinking, write at most one short sentence before the tool call.
 Useful facts about this desktop:
 - App launcher: press the Super key alone (key "super"), type the app name, press Enter.
 - Shortcuts: Super+T terminal (foot), Super+W browser (Firefox), Super+E files (Thunar), Super+C editor (VSCodium), Super+Q close window, Super+F fullscreen.
@@ -27,6 +28,7 @@ Useful facts about this desktop:
 - If none of the installed apps fits the task, use the relevant website in Firefox instead of searching for an app.
 Rules:
 - Work step by step, verify the result of each action on the next screenshot, and recover if something went wrong.
+- To fill a text field, use type_into (click + type in one step) instead of click followed by write.
 - Fields often reformat what you type: e.g. an email address becomes a chip showing the contact's saved name, a URL gets shortened. That means it worked; do not type it again. Once a field is filled, move on to the next one.
 - Be autonomous: choose the obvious app, website or method yourself (the user expects you to work it out, like a capable human assistant would). Do not ask the user about choices you can reasonably make.
 - Use ask_user only for information you cannot find or infer, or to confirm an irreversible step (sending messages/emails, deleting, purchasing, submitting forms, changing system settings).
@@ -46,6 +48,9 @@ TOOLS = [
     T("click", "Left-click at (x, y) coordinates", {"element": EL, "x": X, "y": Y}, ["element", "x", "y"]),
     T("double_click", "Double-click at (x, y) coordinates", {"element": EL, "x": X, "y": Y}, ["element", "x", "y"]),
     T("right_click", "Right-click at (x, y) coordinates", {"element": EL, "x": X, "y": Y}, ["element", "x", "y"]),
+    T("type_into", "Click a text field at (x, y) and type text into it in one step (use this instead of a click followed by write)",
+      {"element": EL, "x": X, "y": Y, "content": {"type": "string", "description": "Text to type"},
+       "press_enter": {"type": "boolean", "description": "Press Enter after typing"}}, ["element", "x", "y", "content"]),
     T("write", "Type text into the focused element. Set press_enter to submit afterwards.",
       {"content": {"type": "string", "description": "Text to type"},
        "press_enter": {"type": "boolean", "description": "Press Enter after typing"}}, ["content"]),
@@ -144,8 +149,21 @@ class Desktop:
         # Hyprland >=0.57 Lua config: dispatch takes a Lua expression
         self._run("hyprctl", "dispatch", f"hl.dsp.cursor.move({{ x = {px}, y = {py} }})")
 
+    def glide(self, px, py, duration=0.12, steps=8):
+        """Ease the cursor to (px, py) instead of teleporting, so people can follow what the agent does."""
+        if self.dry: return
+        try:
+            cx, cy = (int(v) for v in subprocess.check_output(["hyprctl", "cursorpos"]).decode().split(","))
+        except Exception:
+            return
+        for i in range(1, steps):
+            t = i / steps; e = 1 - (1 - t) ** 3                         # ease-out cubic
+            self._warp(round(cx + (px - cx) * e), round(cy + (py - cy) * e)); time.sleep(duration / steps)
+
     def move(self, x, y):
-        px, py = self.to_px(x, y); self._warp(px, py)
+        px, py = self.to_px(x, y)
+        if GLIDE: self.glide(px, py)
+        self._warp(px, py)
         # movecursor warps without a motion event, so Hyprland keeps the old pointer focus;
         # a real 1px wiggle through the virtual device makes the window under the cursor take it.
         self._run("ydotool", "mousemove", "-x", "1", "-y", "0"); self._run("ydotool", "mousemove", "-x", "-1", "-y", "0")
@@ -184,7 +202,8 @@ class Desktop:
 SLOTS = os.environ.get("CUA_SLOTS", "1") == "1"   # pin agent loop / zoom pass to separate server slots
 TIMING = os.environ.get("CUA_TIMING") == "1"
 THINK_BUDGET = int(os.environ.get("CUA_THINK_BUDGET", "256"))
-THINK_MODE = os.environ.get("CUA_THINK_MODE", "adaptive")   # adaptive | always | never
+THINK_MODE = os.environ.get("CUA_THINK_MODE", "adaptive")
+GLIDE = os.environ.get("CUA_GLIDE", "1") == "1"   # animate cursor moves (~0.12 s)   # adaptive | always | never
 TROUBLE = re.compile(r"error|NOTE:|declined|blocked|Not executed|not executed", re.I)
 
 
@@ -222,6 +241,39 @@ def chat(messages, tools=None, temperature=0.8, thinking=True, max_tokens=2048, 
     return r["choices"][0]["message"]
 
 
+def chat_stream(messages, tools=None, temperature=0.8, thinking=True, max_tokens=1200, slot=None, on_text=None):
+    """Like chat(), but streams: on_text(text_so_far) is called as reasoning/content tokens arrive.
+    Returns the same message shape as chat()."""
+    body = {"model": MODEL, "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
+            "chat_template_kwargs": {"enable_thinking": thinking}, "stream": True}
+    if thinking: body["reasoning_budget_tokens"] = THINK_BUDGET
+    if tools: body.update(tools=tools, tool_choice="required")
+    if SLOTS and slot is not None: body["id_slot"] = slot
+    req = urllib.request.Request(BASE + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    text, reasoning, calls, last_cb = "", "", {}, 0.0
+    with urllib.request.urlopen(req, timeout=900) as r:
+        for raw in r:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data: ") or line == "data: [DONE]": continue
+            ch = json.loads(line[6:])
+            if not ch.get("choices"): continue
+            d = ch["choices"][0].get("delta") or {}
+            reasoning += d.get("reasoning_content") or ""
+            text += d.get("content") or ""
+            for tc in d.get("tool_calls") or []:
+                c = calls.setdefault(tc.get("index", 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                if tc.get("id"): c["id"] = tc["id"]
+                f = tc.get("function") or {}
+                c["function"]["name"] += f.get("name") or ""
+                c["function"]["arguments"] += f.get("arguments") or ""
+            if on_text and time.time() - last_cb > 0.12:
+                last_cb = time.time(); on_text((reasoning + "\n" + text).strip())
+    if on_text: on_text((reasoning + "\n" + text).strip())
+    out = {"content": text, "reasoning_content": reasoning}
+    if calls: out["tool_calls"] = [calls[k] for k in sorted(calls)]
+    return out
+
+
 def png_b64(img):
     buf = io.BytesIO(); img.save(buf, "PNG", compress_level=1); return base64.b64encode(buf.getvalue()).decode()
 
@@ -245,7 +297,7 @@ def installed_apps():
 
 def signature(name, a):
     """Coarse identity of an action, for loop detection."""
-    if name in ("click", "double_click", "right_click"):
+    if name in ("click", "double_click", "right_click", "type_into"):
         return (name, round(a.get("x", 0) / 25), round(a.get("y", 0) / 25))
     if name in ("write", "scroll", "wait"): return (name,)
     return (name, json.dumps(a, sort_keys=True))
@@ -314,6 +366,8 @@ def refine(img, element, x, y):
 # ---------------------------------------------------------------- loop
 def describe(name, a):
     if name in ("click", "double_click", "right_click"): return f"{name} '{a.get('element','')}' @({a['x']},{a['y']})"
+    if name == "type_into": return (f"type_into '{a.get('element','')}' @({a['x']},{a['y']}): {a.get('content','')!r}"
+                                    + (" + Enter" if a.get("press_enter") else ""))
     if name == "write": return f"write {a['content']!r}" + (" + Enter" if a.get("press_enter") else "")
     if name == "key": return f"key {a['keys']}"
     if name == "scroll": return f"scroll {a['direction']} x{a.get('amount',3)} @({a['x']},{a['y']})"
@@ -419,7 +473,7 @@ def wait_until_stable(d, timeout=4.0, interval=0.2):
 
 def execute(d, name, a):
     if not d.dry:
-        if name in ("click", "double_click", "right_click", "scroll"): d.guard_click(a["x"], a["y"])
+        if name in ("click", "double_click", "right_click", "scroll", "type_into"): d.guard_click(a["x"], a["y"])
         if name in ("write", "key"): d.guard_keyboard()
     if name == "switch_workspace":
         d.switch_workspace(a["number"]); time.sleep(0.4)
@@ -427,6 +481,11 @@ def execute(d, name, a):
                 if c["workspace"]["id"] == int(a["number"])]
         return (f"ok, now on workspace {a['number']}. "
                 + (f"It is NOT empty, it already has: {', '.join(wins)}." if wins else "It is empty."))
+    if name == "type_into":
+        d.click(a["x"], a["y"]); time.sleep(0.12)
+        d.write(a["content"])
+        if a.get("press_enter"): d.key("enter")
+        return "ok"
     if name == "click": d.click(a["x"], a["y"])
     elif name == "double_click": d.click(a["x"], a["y"], n=2)
     elif name == "right_click": d.click(a["x"], a["y"], "right")

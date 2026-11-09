@@ -80,7 +80,14 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .card b { color: var(--warn); }
 .card .row { display: flex; gap: 8px; margin-top: 8px; }
-.typing { align-self: flex-start; color: var(--muted); font-size: 13px; padding: 2px 4px; }
+.typing {
+  align-self: flex-start; color: var(--muted); font-size: 13px; padding: 6px 10px; max-width: 92%;
+  border-left: 2px solid var(--accent); white-space: pre-wrap; word-wrap: break-word;
+}
+.typing .lbl { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--accent); }
+.typing .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.typing .live { margin-top: 2px; max-height: 7.5em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+@keyframes pulse { 0%,100% { opacity: .25; transform: scale(.8) } 50% { opacity: 1; transform: scale(1.1) } }
 footer {
   display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   background: var(--panel); border-top: 1px solid var(--line);
@@ -170,10 +177,25 @@ function setState(s, wf) {
   if (s !== "working" && typingEl) { typingEl.remove(); typingEl = null; }
 }
 
+function ensureTyping() {
+  if (!typingEl) {
+    typingEl = div("typing", "");
+    const l = div("lbl", ""); l.append(div("dot", ""), document.createTextNode("thinking"));
+    typingEl.append(l, div("live", ""));
+  }
+  if (typingEl.parentNode !== log || log.lastChild !== typingEl) add(typingEl);   // keep it last
+  return typingEl;
+}
 function thinking(text) {
-  if (!typingEl) { typingEl = div("typing", ""); }
-  typingEl.textContent = "thinking… (" + text + ")";
-  add(typingEl);   // re-append keeps it last
+  const t = ensureTyping();
+  t.querySelector(".lbl").lastChild.textContent = text.includes("quick") ? "acting" : "thinking";
+  t.querySelector(".live").textContent = "";
+}
+function live(text) {
+  const t = ensureTyping(), stick = atBottom();
+  // show the tail of what the model is writing right now
+  t.querySelector(".live").textContent = text.split("\n").filter(Boolean).slice(-5).join("\n");
+  if (stick) log.scrollTop = log.scrollHeight;
 }
 
 // ---------------------------------------------------------------- events
@@ -183,6 +205,7 @@ function connect() {
     const ev = JSON.parse(m.data);
     if (ev.kind === "state") return setState(ev.text, ev.waiting_for);
     if (ev.kind === "thinking") return thinking(ev.text);
+    if (ev.kind === "live") return live(ev.text);
     if (ev.id && seen.has(ev.id)) return;
     if (ev.id) seen.add(ev.id);
     if (typingEl && ev.kind !== "state") { typingEl.remove(); typingEl = null; }

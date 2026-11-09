@@ -103,7 +103,7 @@ you don't need to touch the screen for that."""
         with self.lock:
             ev = {"id": self.next_id, "t": time.time(), "kind": kind, "text": text, **extra}
             self.next_id += 1
-            if kind not in ("state", "thinking"): self.events.append(ev)
+            if kind not in ("state", "thinking", "live"): self.events.append(ev)
             for q in list(self.subs): q.put(ev)
         return ev
 
@@ -219,9 +219,10 @@ you don't need to touch the screen for that."""
             while True:   # runs once, or twice when a quick step tried to finish (see "answer" below)
                 redo = False
                 self.emit("thinking", f"step {step}" + ("" if think else ", quick"))
-                msg = agent.chat(self.messages, tools=agent.TOOLS, slot=0, max_tokens=1200, thinking=think)
+                msg = agent.chat_stream(self.messages, tools=agent.TOOLS, slot=0, max_tokens=1200, thinking=think,
+                                        on_text=lambda t: self.emit("live", t[-600:]))
                 calls = msg.get("tool_calls") or []
-                thought = (msg.get("reasoning_content") or "").strip()
+                thought = ((msg.get("reasoning_content") or "") + "\n" + (msg.get("content") or "")).strip()
                 if not calls:
                     # Holo sometimes replies to conversational messages in plain text (and then repeats itself).
                     # Treat that as its answer to the user.
@@ -243,7 +244,7 @@ you don't need to touch the screen for that."""
                     if self.stop.is_set():
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Not executed: the user pressed Stop."})
                         raise Stopped()
-                    if name in ("click", "double_click", "right_click") and a.get("element"):
+                    if name in ("click", "double_click", "right_click", "type_into") and a.get("element"):
                         a["x"], a["y"] = agent.refine(img, a["element"], a["x"], a["y"])
                     desc = agent.describe(name, a)
                     self.journal.append(f"Action: {desc}")
@@ -442,6 +443,13 @@ def main():
     SESSION = Session()
     SCREEN = Screen(SESSION.desktop.mon)
     threading.Thread(target=SESSION.worker, daemon=True).start()
+    def warmup():   # load the model into the GPU now, so the first task doesn't wait for it
+        for _ in range(30):
+            try:
+                agent.chat([{"role": "user", "content": "hi"}], thinking=False, max_tokens=1); return
+            except Exception:
+                time.sleep(2)
+    threading.Thread(target=warmup, daemon=True).start()
     srv = Server((HOST, PORT), Handler)
     print(f"CUA service on http://{HOST}:{PORT}/  (model {agent.MODEL}, {len(SESSION.events)} events restored)", flush=True)
     try:
