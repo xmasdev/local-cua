@@ -198,6 +198,7 @@ you don't need to touch the screen for that."""
             with self.lock:
                 self.messages.append({"role": "user", "content": msg}); self.journal.append(f"User: {msg}")
             self.set_state("working")
+            agent.current_request = msg; self.reader_answer = None
             try:
                 self.run_task()
             except Stopped:
@@ -266,7 +267,11 @@ you don't need to touch the screen for that."""
                     if name == "answer":
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Delivered to the user."})
                         self.journal.append(f"Agent answered: {a.get('content', '')}")
-                        self.emit("answer", a.get("content", ""), thought=thought[-600:])
+                        text = a.get("content", "")
+                        if self.reader_answer:   # show the reader's answer instead of a retyped (error-prone) copy
+                            first = re.split(r"(?<=[.!?])\s|\n", text.strip(), maxsplit=1)[0] if text.strip() else ""
+                            text = (first + "\n\n" + self.reader_answer).strip()
+                        self.emit("answer", text, thought=thought[-600:])
                         return
                     point = {"x": a["x"], "y": a["y"]} if "x" in a and "y" in a else None
                     if name == "ask_user":
@@ -299,6 +304,8 @@ you don't need to touch the screen for that."""
                         self.emit("status", "Loop detected, nudging the agent to change approach.")
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
                     last_result = str(result)
+                    if name == "read_text" and last_result.startswith("Answer from the page text"):
+                        self.reader_answer = last_result.split("\n", 1)[1].rsplit("\nThis answer is shown", 1)[0].strip()
                 if redo: continue      # same screenshot, now with thinking
                 break
             time.sleep(0.15)
@@ -457,6 +464,7 @@ def main():
     TOKEN = load_token()
     SESSION = Session()
     SCREEN = Screen(SESSION.desktop.mon)
+    agent.on_status = lambda t: SESSION.emit("status", t)
     threading.Thread(target=SESSION.worker, daemon=True).start()
     def warmup():   # load the model into the GPU now, so the first task doesn't wait for it
         for _ in range(30):

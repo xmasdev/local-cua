@@ -66,9 +66,11 @@ TOOLS = [
       {"x1": X, "y1": Y, "x2": X, "y2": Y}, ["x1", "y1", "x2", "y2"]),
     T("switch_workspace", "Switch to Hyprland workspace (desktop) number N. Use an empty one for a fresh desktop.",
       {"number": {"type": "integer", "description": "Workspace number 1-9"}}, ["number"]),
-    T("read_text", "Get all the text of the focused window (web page, document, editor) as plain text, in one step. "
-      "Use it to read or search pages instead of scrolling through them. Click an empty part of the page first "
-      "if a text field has focus.", {}, []),
+    T("read_text", "Read all the text of the focused window (web page, document, editor) in one step and get the "
+      "answer to your question from it. Use it to read or search pages instead of scrolling through them. "
+      "Click an empty part of the page first if a text field has focus.",
+      {"question": {"type": "string", "description": "What you need from the text, as a complete question "
+                    "(e.g. 'What are the names of all the pathways?')"}}, ["question"]),
     T("wait", "Wait for the screen to update (page loads, app start)",
       {"seconds": {"type": "number", "description": "Seconds to wait (max 10)"}}, ["seconds"]),
     T("ask_user", "Ask the user a question or for confirmation; returns their reply",
@@ -244,7 +246,11 @@ SLOTS = os.environ.get("CUA_SLOTS", "1") == "1"   # pin agent loop / zoom pass t
 TIMING = os.environ.get("CUA_TIMING") == "1"
 THINK_BUDGET = int(os.environ.get("CUA_THINK_BUDGET", "256"))
 THINK_MODE = os.environ.get("CUA_THINK_MODE", "adaptive")
-GLIDE = os.environ.get("CUA_GLIDE", "1") == "1"   # animate cursor moves (~0.12 s)   # adaptive | always | never
+GLIDE = os.environ.get("CUA_GLIDE", "1") == "1"   # animate cursor moves (~0.12 s)
+READER = os.environ.get("CUA_READER", "Qwen3.5-9B-reader")   # text model for long read_text results ("" = off)
+READ_DIRECT_MAX = 4000      # shorter texts go straight to the agent model
+on_status = None            # set by the service: on_status("text") shows progress in the UIs
+current_request = ""        # the user's current request, so the reader answers what the user actually asked   # adaptive | always | never
 TROUBLE = re.compile(r"error|NOTE:|declined|blocked|Not executed|not executed", re.I)
 
 
@@ -342,6 +348,32 @@ def signature(name, a):
         return (name, round(a.get("x", 0) / 25), round(a.get("y", 0) / 25))
     if name in ("write", "scroll", "wait"): return (name,)
     return (name, json.dumps(a, sort_keys=True))
+
+
+def read_with_reader(text, question, max_chars=60000):
+    """Long page text: let a stronger text model answer the agent's question from it. The GPU holds one model
+    at a time, so this swaps the reader in (the agent model reloads on its next step). Only used here."""
+    body = text.split("\n", 1)[1] if "\n" in text else text
+    if on_status: on_status(f"Reading {len(body):,} characters with {READER}…")
+    req = {"model": READER, "temperature": 0.0, "max_tokens": 1000, "chat_template_kwargs": {"enable_thinking": False},
+           "messages": [{"role": "system", "content": "You extract information from page text for a computer-use agent. "
+                         "Answer the question using only the text. Be complete and accurate but brief: give the direct answer, "
+                         "list names only (no descriptions), at most about 120 words. List items exactly as named in the text. "
+                         "If the text does not contain the answer, say so and say what the page is about."},
+                        {"role": "user", "content": (
+                            f"Question (from the user): {current_request}\n(The agent is looking for: {question})\n"
+                            if current_request else f"Question: {question}\n") + f"\nPage text:\n{body[:max_chars]}"}]}
+    t0 = time.time()
+    try:
+        r = json.load(urllib.request.urlopen(urllib.request.Request(
+            BASE + "/chat/completions", json.dumps(req).encode(), {"Content-Type": "application/json"}), timeout=600))
+        ans = r["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return f"(the reading model failed: {e})\n" + text[:20000]
+    if on_status: on_status(f"Read the page in {time.time() - t0:.0f} s.")
+    return (f"Answer from the page text ({len(body):,} chars, read by {READER}):\n{ans}\n"
+            "This answer is shown to the user automatically together with yours. If it answers the request, call answer "
+            "with only one short sentence (do not repeat the list or details). You do not need to read the page again.")
 
 
 def loop_advice(names):
@@ -548,7 +580,11 @@ def execute(d, name, a):
     elif name == "scroll": d.scroll(a["x"], a["y"], a["direction"], a.get("amount", 3))
     elif name == "drag": d.drag(a["x1"], a["y1"], a["x2"], a["y2"])
     elif name == "wait": time.sleep(min(float(a.get("seconds", 1)), 10))
-    elif name == "read_text": return d.read_text()
+    elif name == "read_text":
+        text = d.read_text()
+        if not text.startswith("Text of the focused window") or len(text) <= READ_DIRECT_MAX or not READER:
+            return text
+        return read_with_reader(text, a.get("question") or "Summarize the important information in this text.")
     else: return f"unknown tool {name}"
     return "ok"
 
