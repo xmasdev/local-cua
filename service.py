@@ -24,7 +24,7 @@ TOKEN_FILE = os.path.join(HOME, "token")
 WEB = os.path.join(HOME, "web")
 HOST, PORT = os.environ.get("CUA_HOST", "127.0.0.1"), int(os.environ.get("CUA_PORT", "8765"))
 MAX_STEPS = int(os.environ.get("CUA_MAX_STEPS", "40"))
-CTX_BUDGET = 10500          # est. prompt tokens before compacting history (slot ctx is 16k)
+CTX_BUDGET = 60000          # est. prompt tokens before compacting history (80k unified context)
 IMG_TOKENS = 2100           # one 1080p screenshot
 UNANSWERED = object()
 
@@ -34,6 +34,16 @@ def load_token():
         with open(TOKEN_FILE, "w") as f: f.write(secrets.token_urlsafe(24))
         os.chmod(TOKEN_FILE, 0o600)
     return open(TOKEN_FILE).read().strip()
+
+
+def salvage_args(raw):
+    """Arguments cut off by the token limit: recover the string fields that are there (mainly answer content)."""
+    out = {}
+    for k, v in re.findall(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)', raw or ""):
+        try: out[k] = json.loads('"' + v + '"')
+        except Exception: out[k] = v
+    if "content" in out: out["content"] += " …(cut off)"
+    return out
 
 
 def dedupe(text, max_paras=4):
@@ -205,7 +215,7 @@ you don't need to touch the screen for that."""
 
     def run_task(self):
         d = self.desktop
-        history, last_nudge, empty_steps, prev_thumb, last_result = [], -99, 0, None, ""
+        history, last_nudge, empty_steps, prev_thumb, last_result, nudges = [], -99, 0, None, "", 0
         for step in range(1, MAX_STEPS + 1):
             if self.stop.is_set(): raise Stopped()
             self.user_spoke = False
@@ -219,7 +229,7 @@ you don't need to touch the screen for that."""
             while True:   # runs once, or twice when a quick step tried to finish (see "answer" below)
                 redo = False
                 self.emit("thinking", f"step {step}" + ("" if think else ", quick"))
-                msg = agent.chat_stream(self.messages, tools=agent.TOOLS, slot=0, max_tokens=1200, thinking=think,
+                msg = agent.chat_stream(self.messages, tools=agent.TOOLS, slot=0, max_tokens=3000, thinking=think,
                                         on_text=lambda t: self.emit("live", t[-600:]))
                 calls = msg.get("tool_calls") or []
                 thought = ((msg.get("reasoning_content") or "") + "\n" + (msg.get("content") or "")).strip()
@@ -240,7 +250,7 @@ you don't need to touch the screen for that."""
                 for call in calls:
                     name = call["function"]["name"]
                     try: a = json.loads(call["function"]["arguments"] or "{}")
-                    except json.JSONDecodeError: a = {}
+                    except json.JSONDecodeError: a = salvage_args(call["function"]["arguments"])
                     if self.stop.is_set():
                         self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Not executed: the user pressed Stop."})
                         raise Stopped()
@@ -278,10 +288,15 @@ you don't need to touch the screen for that."""
                         except Exception as e:
                             result = f"error: {e}"; self.emit("status", str(result))
                     history.append(agent.signature(name, a)); recent = history[-8:]
-                    if step - last_nudge >= 4 and max(recent.count(x) for x in recent) >= 3:
-                        result = (f"{result}\nNOTE: you have repeated similar actions several times without making progress. "
-                                  "Step back, think about a completely different way to accomplish the task, and do that instead.")
-                        last_nudge = step
+                    if step - last_nudge >= 3 and max(recent.count(x) for x in recent) >= 3:
+                        nudges += 1; last_nudge = step
+                        if nudges >= 4:   # still stuck after 3 nudges: stop and hand back to the user
+                            self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+                            self.emit("answer", "I seem to be stuck (" + agent.describe(name, a)[:80] + ", repeatedly). "
+                                      "I stopped here. Tell me how to continue or what to do differently.")
+                            self.journal.append("(stopped: stuck in a loop)"); return
+                        result = f"{result}\n" + agent.loop_advice([h[0] for h in recent])
+                        self.emit("status", "Loop detected, nudging the agent to change approach.")
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
                     last_result = str(result)
                 if redo: continue      # same screenshot, now with thinking

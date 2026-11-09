@@ -9,7 +9,7 @@ Kill switch: SUPER+SHIFT+Escape (Hyprland bind -> pkill -f cua/agent.py), or Ctr
 Loop format follows H Company's docs (function calling, <observation> screenshots, last 3 images,
 'answer' tool ends the run, thinking on / temp 0.8 for steps, coords in [0,1000]).
 """
-import argparse, base64, io, json, os, re, subprocess, sys, time, urllib.request
+import argparse, base64, io, json, os, re, shutil, subprocess, sys, time, urllib.request
 from PIL import Image
 
 BASE = os.environ.get("CUA_BASE_URL", "http://127.0.0.1:8080/v1")
@@ -29,6 +29,8 @@ Useful facts about this desktop:
 Rules:
 - Work step by step, verify the result of each action on the next screenshot, and recover if something went wrong.
 - To fill a text field, use type_into (click + type in one step) instead of click followed by write.
+- To read or extract information from a page or document (lists, names, numbers, articles), call read_text once
+  and answer from the text instead of scrolling back and forth. Scroll only to reach something you need to click.
 - After every action the screen is already given time to settle before you see it. Only call wait when a page or app is visibly still loading.
 - Fields often reformat what you type: e.g. an email address becomes a chip showing the contact's saved name, a URL gets shortened. That means it worked; do not type it again. Once a field is filled, move on to the next one.
 - Be autonomous: choose the obvious app, website or method yourself (the user expects you to work it out, like a capable human assistant would). Do not ask the user about choices you can reasonably make.
@@ -64,6 +66,9 @@ TOOLS = [
       {"x1": X, "y1": Y, "x2": X, "y2": Y}, ["x1", "y1", "x2", "y2"]),
     T("switch_workspace", "Switch to Hyprland workspace (desktop) number N. Use an empty one for a fresh desktop.",
       {"number": {"type": "integer", "description": "Workspace number 1-9"}}, ["number"]),
+    T("read_text", "Get all the text of the focused window (web page, document, editor) as plain text, in one step. "
+      "Use it to read or search pages instead of scrolling through them. Click an empty part of the page first "
+      "if a text field has focus.", {}, []),
     T("wait", "Wait for the screen to update (page loads, app start)",
       {"seconds": {"type": "number", "description": "Seconds to wait (max 10)"}}, ["seconds"]),
     T("ask_user", "Ask the user a question or for confirmation; returns their reply",
@@ -187,6 +192,41 @@ class Desktop:
         seq = [f"{c}:1" for c in codes] + [f"{c}:0" for c in reversed(codes)]
         self._run("ydotool", "key", *seq)
 
+    def read_text(self, limit=24000):
+        """Ctrl+A, Ctrl+C, read the clipboard, then put the user's clipboard back and drop the copied
+        page text from cliphist. (Firefox does not publish Ctrl+A as the primary selection.)"""
+        if self.dry: return "(dry run)"
+        def run(*cmd, inp=None):
+            return subprocess.run(cmd, input=inp, capture_output=True, timeout=3)
+        saved = None
+        try:   # keep whatever the user had on the clipboard (text or image)
+            types = run("wl-paste", "--list-types").stdout.decode().split()
+            t = next((x for x in types if x.startswith("text/plain")), types[0] if types else None)
+            if t: saved = (t, run("wl-paste", "--no-newline", "--type", t).stdout)
+        except Exception:
+            pass
+        self.key("ctrl+a"); time.sleep(0.15); self.key("ctrl+c"); time.sleep(0.35)
+        txt = run("wl-paste", "--no-newline", "--type", "text/plain").stdout.decode("utf-8", "replace")
+        if saved and txt and txt.encode() == saved[1]: txt = ""        # nothing new was copied
+        try:   # remove the page text from clipboard history, then restore the clipboard
+            if txt and shutil.which("cliphist"):
+                time.sleep(0.2)
+                head = re.sub(r"\s+", " ", txt[:40]).strip()
+                for line in run("cliphist", "list").stdout.decode("utf-8", "replace").splitlines()[:5]:
+                    if line.split("\t", 1)[-1].startswith(head[:30]):
+                        run("cliphist", "delete", inp=(line + "\n").encode()); break
+            if saved: run("wl-copy", "--type", saved[0], inp=saved[1])
+            else: run("wl-copy", "--clear")
+        except Exception:
+            pass
+        txt = re.sub(r"[ \t]+", " ", txt); txt = re.sub(r"\n\s*\n+", "\n", txt).strip()
+        if len(txt) < 40:
+            return ("Got almost no text. The window may not support select-all, or a text field has focus: "
+                    "click once on plain text in the page (not a link or field), then call read_text again. "
+                    "If it fails twice, read the screen instead.")
+        more = len(txt) > limit
+        return f"Text of the focused window ({len(txt)} chars{', truncated' if more else ''}):\n" + txt[:limit]
+
     def scroll(self, x, y, direction, amount):
         self.move(x, y)
         dx, dy = {"up": (0, 1), "down": (0, -1), "left": (-1, 0), "right": (1, 0)}[direction]
@@ -302,6 +342,15 @@ def signature(name, a):
         return (name, round(a.get("x", 0) / 25), round(a.get("y", 0) / 25))
     if name in ("write", "scroll", "wait"): return (name,)
     return (name, json.dumps(a, sort_keys=True))
+
+
+def loop_advice(names):
+    """What to tell the model when it repeats itself, based on what it keeps doing."""
+    if names.count("scroll") >= 4:
+        return ("NOTE: you keep scrolling back and forth. If you are trying to read or find information, call "
+                "read_text now to get the whole text at once, then answer from it.")
+    return ("NOTE: you have repeated similar actions several times without making progress. Step back, think about "
+            "a completely different way to accomplish the task, and do that instead.")
 
 
 def desktop_state():
@@ -475,7 +524,7 @@ def wait_until_stable(d, timeout=4.0, interval=0.2):
 def execute(d, name, a):
     if not d.dry:
         if name in ("click", "double_click", "right_click", "scroll", "type_into"): d.guard_click(a["x"], a["y"])
-        if name in ("write", "key"): d.guard_keyboard()
+        if name in ("write", "key", "read_text"): d.guard_keyboard()
     if name == "switch_workspace":
         d.switch_workspace(a["number"]); time.sleep(0.4)
         wins = [c["class"] for c in json.loads(subprocess.check_output(["hyprctl", "clients", "-j"]))
@@ -499,6 +548,7 @@ def execute(d, name, a):
     elif name == "scroll": d.scroll(a["x"], a["y"], a["direction"], a.get("amount", 3))
     elif name == "drag": d.drag(a["x1"], a["y1"], a["x2"], a["y2"])
     elif name == "wait": time.sleep(min(float(a.get("seconds", 1)), 10))
+    elif name == "read_text": return d.read_text()
     else: return f"unknown tool {name}"
     return "ok"
 
