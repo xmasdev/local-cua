@@ -3,3 +3,6 @@ holo4b: ALL  75.0% (n=248) | Pro  59.5% (n=148) | v2  98.0% (n=100) | median 2.4
 holo4b-zoom: ALL  69.6% (n=148) | Pro  69.6% (n=148) | v2   0.0% (n=0) | median 3.8s | errors 0
 holo9b-zoom: ALL  68.9% (n=148) | Pro  68.9% (n=148) | v2   0.0% (n=0) | median 8.9s | errors 0
 qwen35-9b: ALL  50.0% (n=148) | Pro  50.0% (n=148) | v2   0.0% (n=0) | median 6.3s | errors 0
+q4-zoom-2304: ALL  65.5% (n=148) | Pro  65.5% (n=148) | v2   0.0% (n=0) | median 3.5s | errors 0
+q4-zoom-1280: ALL  66.9% (n=148) | Pro  66.9% (n=148) | v2   0.0% (n=0) | median 2.4s | errors 0
+q5-zoom-1280: ALL  67.6% (n=148) | Pro  67.6% (n=148) | v2   0.0% (n=0) | median 2.5s | errors 0

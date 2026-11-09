@@ -6,7 +6,7 @@ your phone, and it looks at the screen and clicks, types and scrolls until the j
 - **Fully local.** The model runs on your GPU through llama.cpp. Screenshots never leave the machine.
 - **Fits a laptop GPU.** Built and tuned on an RTX 4050 with 6 GB of VRAM.
 - **Live and interruptible.** One ongoing conversation that remembers earlier tasks. Send corrections while
-  it works, answer its questions, or press Stop.
+  it works, answer its questions, or press Stop. You see what it is writing as it writes it.
 - **Phone app.** Watch the PC screen live and chat with the agent from anywhere, privately over Tailscale.
 
 Built for Arch Linux with the Hyprland compositor (Wayland). Other Wayland compositors need small changes
@@ -66,7 +66,10 @@ target element. Measured on an RTX 4050 Laptop GPU (6 GB).
 
 | Setup | ScreenSpot-Pro | ScreenSpot-v2 | Time per click |
 |---|---|---|---|
-| **Holo3.1-4B Q5_K_M + zoom pass** (default) | **69.6%** | | 3.8 s |
+| Holo3.1-4B Q5_K_M + zoom pass, full resolution | 69.6% | | 3.8 s |
+| **Holo3.1-4B Q5_K_M + zoom pass, 1280 image tokens** (default) | **67.6%** | | **2.5 s** |
+| Holo3.1-4B Q4_K_M + zoom pass, 1280 image tokens | 66.9% | | 2.4 s |
+| Holo3.1-4B Q4_K_M + zoom pass, full resolution | 65.5% | | 3.5 s |
 | Holo3.1-9B IQ4_XS + zoom pass | 68.9% | | 8.9 s |
 | Holo3.1-9B IQ4_XS | 61.5% | 96.0% | 5.5 s |
 | Holo3.1-4B Q5_K_M | 59.5% | 98.0% | 2.4 s |
@@ -76,15 +79,31 @@ What this showed:
 
 - The 9B model does not fit fully in 6 GB, so it is twice as slow and no more accurate once the zoom pass is on.
 - The zoom pass adds about 10 points on hard screens for about 1.4 s per click.
-- Fewer image tokens (1280 instead of about 2100 per screenshot) saved 0.7 s per step but cost about 1.5 points,
-  so the default keeps full resolution.
+- 1280 image tokens per screenshot instead of about 2100 makes grounding 34% faster for 2 points, so that is
+  the default. Q4 instead of Q5 is barely faster and less accurate.
 
-Speed work on the agent loop cut a step from about 7 to 8.5 s down to about 3.5 to 4.8 s:
+### Speed of the agent loop
 
-- The zoom pass runs on its own server slot, so it no longer wipes the prompt cache of the main loop.
-- Old screenshots are dropped in batches (let up to 3 build up, then keep only the newest), so each step only
-  processes about 2,100 new tokens instead of the whole history.
-- Thinking is capped at 512 tokens per step, and the output at 1,200 tokens.
+Measured by replaying a recorded 15-step task (`bench/replay.py`), model time per step:
+
+| Change | Quick step | Thinking step |
+|---|---|---|
+| Start (full history re-read every step) | | 7 to 8.5 s |
+| Zoom pass on its own slot, screenshots evicted in batches | | 4.8 s |
+| Adaptive thinking (only when it matters) | 3.4 s | 4.3 s |
+| At most one sentence before each action | 3.05 s | |
+| 1280 image tokens | **2.33 s** | **3.48 s** |
+
+What else was tried:
+
+- Flash attention and CUDA graphs were already on. Bigger batches (`-ub 2048`) and a native rebuild gave nothing.
+- Speculative decoding with Holo3.1-0.8B as the draft model was slower (34 to 38 tok/s vs 46): llama.cpp cannot
+  pass image embeddings to the draft, so it guesses blind. `ngram-mod` speculation is on (about 8% faster, no VRAM).
+- Outside the model: screenshots as PPM (118 to 23 ms), PNG level 1 (75 to 31 ms), settle detection with tiny
+  scaled grabs (790 to 360 ms), and waiting for the screen to change after app shortcuts instead of 1.5 s.
+
+Fewer steps help as much as faster steps: `type_into` clicks a field and types in one action, and a quick step
+that tries to finish is re-checked with thinking on so tasks are not declared done too early.
 
 Reproduce: `python3 bench/prepare_data.py`, start a model with `bench/serve.sh`, then
 `python3 bench/bench.py NAME --maxside 1920 [--zoom] [--only pro]`. Raw results are in `bench/results/`.
@@ -172,7 +191,9 @@ that matters, and watch it the first few times.
 | `CUA_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible endpoint |
 | `CUA_MODELS_DIR` | `~/models/llama.cpp` | Where the router looks for GGUF models |
 | `LLAMA_SERVER` | `llama-server` on PATH | Path to the llama.cpp server binary |
-| `CUA_THINK_BUDGET` | `512` | Max thinking tokens per step |
+| `CUA_THINK_MODE` | `adaptive` | `adaptive`, `always` or `never` |
+| `CUA_THINK_BUDGET` | `256` | Max thinking tokens per step |
+| `CUA_GLIDE` | `1` | Animate cursor moves instead of teleporting |
 | `CUA_MAX_STEPS` | `40` | Step limit per task in the service |
 | `CUA_PORT` | `8765` | Web app port (localhost only) |
 

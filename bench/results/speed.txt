@@ -12,3 +12,5 @@ ub512-nothink: step 3.37s | prompt 1.37s | gen 90 tok @ 50.4 tok/s (1.79s) | dra
 ub2048-nothink: step 3.43s | prompt 1.42s | gen 97 tok @ 54.5 tok/s (1.77s) | draft accepted 392/1423 | same tool as recorded 13/15
 router-q5-nothink: step 3.43s | prompt 1.34s | gen 98 tok @ 52.8 tok/s (1.85s) | draft accepted 314/1289 | same tool as recorded 9/15
 router-q5-nothink-1sentence: step 3.05s | prompt 1.38s | gen 87 tok @ 61.1 tok/s (1.42s) | draft accepted 490/1562 | same tool as recorded 12/15
+prod-q5-1280-nothink: step 2.33s | prompt 0.65s | gen 84 tok @ 56.9 tok/s (1.48s) | draft accepted 343/1217 | same tool as recorded 10/15
+prod-q5-1280-think: step 3.48s | prompt 0.65s | gen 139 tok @ 52.7 tok/s (2.63s) | draft accepted 373/1504 | same tool as recorded 10/15
